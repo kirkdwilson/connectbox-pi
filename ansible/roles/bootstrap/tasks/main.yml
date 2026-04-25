@@ -1,10 +1,166 @@
 ---
+
+- name: Make connectbox directory
+  file:
+    state: directory
+    path: /usr/local/connectbox
+    mode: 0755
+
+# Needs to happen prior to partitioning
+#- name: Create moodledata directory that Moodle requires for all its functions
+#  file:
+#    state: directory
+#    path: /var/www/moodledata/
+#    owner: www-data
+#    group: www-data
+#    mode: 0775
+#  when: (build_moodle == True)
+
+###########################################
+
+
 # Check early on to see if the style of interface names need to be changed
 #  (only applicable to Ubuntu, and not when we're running virtualised)
 # We do this before the check for the Armbian reboot oracle. If we need
 #  to reboot to activate the old-style interface names, we'll sort out the
 #  reboot oracle too, but if the reboot oracle check is before this check
 #  we'll need to reboot a second time (after creating the symlink)
+
+- name: Check for release of OS_Release Codename
+  command: lsb_release -a
+  register: OS_Release
+
+- name: Check the OS_Release for OS Codename
+  set_fact:
+      OS_Version: "{{ OS_Release.stdout.partition('Codename:')[2].strip() }}"
+
+- name: Display the Codename
+  debug:
+    msg: "The version your running is {{ OS_Version }} for Codename:" 
+
+- debug:
+    msg: "Ansible Group Variables Family {{ ansible_os_family|lower }}"
+
+- debug:
+    msg: "Ansible Group Variables Distribution {{ ansible_distribution|lower }}"
+
+- debug:
+    msg: "Ansible Group Variables Target Specific {{ ansible_lsb['id']|lower }}"
+
+- debug:
+    msg: "connectbox_os {{ connectbox_os }}"
+
+- debug:
+    msg: "ansible_kernel {{ ansible_kernel }}"
+
+- debug:
+    msg: "ansible_facts['os_family']: {{ ansible_facts['os_family'] }} "
+
+- debug:
+    msg: "ansible_interfaces {{ ansible_interfaces }} "
+
+- debug:
+    msg: "machine_type['stdout_lines']: {{ machine_type['stdout_lines'] }} "
+
+- name: Try setting up a find on text and regex on text
+  set_fact:
+    CM4_present: '{{ happy2 }}'
+    Pi_present:  '{{ happy3 }}'
+    OZ2_present: '{{ happy4 }}'
+    NEO_present: '{{ happy5 }}'  
+    MType: '{{ happy1 }}'
+    RM3_present: '{{ happy6 }}'
+  vars:
+    happy0: "stdout_lines"
+    happy1: '{{ machine_type[happy0] }}|first'
+    happy2: '{{ happy1.find("Compute Module 4") > 0 }}'
+    happy3: '{{ (happy1.find("Raspberry Pi") >= 0) }}'
+    happy4: '{{ (happy1.find("Orange") >=0 ) }}'
+    happy5: '{{ (happy1.find("NEO") >=0) }}'
+    happy6: '{{ (happy1.find("Radxa CM3") >= 0) }}'
+
+
+-  debug:
+    msg: "working on base of {{ MType  }}"
+
+- debug:
+    msg: "search fro CM4 present : {{ CM4_present }} "
+
+- debug:
+    msg: "search for Pi present : {{ Pi_present }}"
+
+- debug:
+    msg: "search for Orange Pi Zero2 present : {{ OZ2_present }}"
+
+- debug:
+    msg: "search for NEO PI present : {{ NEO_present }}" 
+
+- debug:
+    msg: "search for Radxa CM3 present : {{ RM3_present }}" 
+
+ 
+- name: change the connectbox_os name if we are running on a PI
+  set_fact:
+    connectbox_os: "{{ happy9 }}"
+  vars:
+    happy9: "raspbian"
+  when: Pi_present
+
+# Raspberry Pi partitioning for building via Ansible
+- name: Get Name of SD card - RPi
+  shell: lsblk -d | grep mmcblk0 | awk '{print $1;}'
+  register: sdcard_name
+  when: (connectbox_os == "raspbian") and Pi_present
+
+# Radxa build
+- name: Get Name of SD card - Radxa
+  shell: lsblk -d | grep mmcblk1 | awk '{print $1;}'
+  register: sdcard_name
+  when:  RM3_present
+
+- name: Read SD card information 
+  community.general.parted: device=/dev/{{ sdcard_name.stdout }} unit=MiB
+  register: sdcard_info
+  when: RM3_present or Pi_present
+  
+- name: Extend the existing OS partition to 4 GB so we have enough space to load all The Well software
+  community.general.parted:
+    device: /dev/{{ sdcard_name.stdout }}
+    number: "{{ sdcard_info.partitions | length }}"
+    part_end: "4GB"
+    resize: true
+    state: present
+  ignore_errors: yes
+  when: Pi_present and sdcard_info.partitions[1].size < 5000
+
+# resize2fs will expand file system to fill partition space
+- name: Complete the resize filesystem of OS partition - RPi
+  command: resize2fs /dev/{{ sdcard_name.stdout }}p2
+  become: true
+  when: Pi_present and sdcard_info.partitions[1].size < 5000
+
+- name: Complete the resize filesystem of OS partition - Radxa CM3 
+  command: resize2fs /dev/{{ sdcard_name.stdout }}p2
+  become: true
+  when: RM3_present and sdcard_info.partitions[1].size < 5000
+
+
+##########################################
+# Set default passwords
+- name: Change user password
+  user:
+    name: pi
+    update_password: always
+    password: "{{ connectbox_system_password|password_hash('sha512') }}"
+
+- name: Change user password
+  user:
+    name: root
+    update_password: always
+    password: "{{ connectbox_system_password|password_hash('sha512') }}"
+  become: true
+  
+
 - name: setup use of old-style interface names for predictability across devices
   file:
     dest: /etc/udev/rules.d/80-net-setup-link.rules
@@ -19,28 +175,115 @@
   when: old_style_names.changed
   tags: skip_ansible_lint
 
+- name: Install boot for Raspian on i2c and usbhost
+  copy:
+    src: config.txt 
+    dest: /boot/config.txt
+  when: connectbox_os == 'raspbian'
+
+- name: Install i2c modules
+  copy:
+    src: modules
+    dest: /etc/modules
+  when: ansible_os_family == 'Debian'
+
+
 # Check early on to see whether the OS needs to be
 # rebooted to allow a disk expansion step to complete.
 # This is Armbian only, but the check doesn't hurt others.
-- name: Check for resize2fs reboot oracle
+
+- name: Setup the location of resize2fs for OZ2
+  set_fact:
+    rsfs2: "/usr/lib/orangepi/orangepi-resize-filesyste"
+  when: OZ2_present
+
+- name: setup the location of resize2fs for Pi, NEO, CM4
+  set_fact:
+    rsfs2: "/var/run/resize2fs-reboot" 
+  when: (not OZ2_present)
+
+- debug:
+    msg: "the directory to check will be: {{ rsfs2 }}"
+
+- name:  Check on PI resize file-system
   stat:
-    path: "/var/run/resize2fs-reboot"
-  register: resize2fs_reboot
+    path: "{{ rsfs2 }}"
+  register: resize2fs
+
+- debug:
+    msg: "reboot status is: {{ resize2fs.stat.exists }}"
 
 # If the oracle above exists then we shouldn't continue
 - name: Fail when disk expansion is incomplete
   set_fact:
     reboot_required: True
-  when: resize2fs_reboot.stat.exists == True
+  when: resize2fs.stat.exists
 
 # Disable automated apt-y things before attempting to install packages
 # unattended-upgrades and apt.systemd.daily only run on Ubuntu
-- name: Stop automated apty services
+- name: Stop automated apt services Ubuntu
   service:
-    name: "{{ item }}"
+    name: '{{ item }}' 
     state: stopped
     enabled: no
-  with_items: "{{ apty_services }}"
+  with_items: '{{ apt_services }}'
+  when: ansible_os_family == 'Ubuntu'
+
+- name: stop automated apt services Debian
+  service:
+    name: '{{ item }}'
+    state: stopped
+    enabled: no
+  with_items:
+    - 'apt-daily.timer'
+    - 'packagekit.service'
+  ignore_errors: True
+  when: ansible_os_family == 'Debian'
+
+
+# We are putting the update early in the build so that we reduce the number of reboots.  This update will
+# bring the kernal up to date.  We will need this when we compile the network drivers later.
+
+- name: apt update before kernel downloads (not NEO)
+  apt: 
+    upgrade: yes
+    update_cache: yes
+  ##  need to comment "allow_downgrade: yes" if this is the second pass throught the code
+    allow_downgrade: yes
+    state: fixed
+  register: dist_upgraded
+  when: not NEO_present
+
+#- name: apt update before kernel downloads (NEO)
+#  apt: 
+#    upgrade: yes
+#    update_cache: yes
+#    state: fixed
+#  register: dist_upgraded
+#  when: NEO_present
+
+
+- name: Check the changes to see if we need to reboot
+  set_fact:
+    rbtreq: dist_upgraded.stdout | regex_search('0 upgraded, 0 newly installed, 0 to remove and 0') 
+
+- name: print the facts of reboot needed
+  debug:
+    msg: "the output of dist_upgrade was {{ dist_upgraded.stdout }} and reboot required is {{ rbtreq }}"
+  ignore_errors: True
+
+- name: Auto clean the packages
+  apt:
+    autoclean: yes
+
+- name: setup the system to ust only multi-user.target if its a PI
+  command: systemctl set-default multi-user.target
+  when: Pi_present or CM4_present or OZ2_present
+
+- name: Setup reboot if Upgrade actually occured
+  set_fact:
+    reboot_required: True
+  when: rbtreq == ""
 
 # Needs to happen before the initial reboot, given the job triggers actions
 #  on @reboot
@@ -48,64 +291,241 @@
   file:
     path: /etc/cron.d/armbian-updates
     state: absent
-  when: connectbox_os == "armbian"
+  when: ansible_facts['os_family'] == 'Ubuntu' or connectbox_os == 'armbian' or (OZ2_present and ansible_distribution|lower == 'ubuntu')
 
+
+- name: Disable OrangePi auto-update processes
+  file:
+    path: /etc/cron.d/orangepi-apt-updates
+    state: absent
+  when: OZ2_present 
+
+- name: Disable systemd-resolve to remove port conflicts
+  command: systemctl disable systemd-resolved
+
+- name: Add i2c0 to /boot/armbianEnv.txt
+  replace:
+    path: /boot/armbianEnv.txt
+    regexp: '(^overlays=.*)'
+    replace: 'overlays=i2c0 usbhost0  usbhost1 cpu-clock-1.368Hz-1.3V'
+  register: regxreplace
+  when: (ansible_os_family == 'Ubuntu' or connectbox_os == 'armbian') and not aws_instance and not OZ2_present
+
+- name: the results from the proceeding wireless
+  debug:
+    msg:"armbian replacement of overlays yeilded {{ regxreplace }}"
+  ignore_errors: True
+
+- name: Remove g_mass_storage device as default
+  command: modprobe -r g_mass_storage
+  when: connectbox_os == 'armbian' and (OS_Version == 'xenial' or OS_Version == 'focal')
+
+- name: Add g_serial device as default
+  command: modprobe g_serial
+  when: connectbox_os == 'ubuntu'  and (OS_Version == 'xenial' or OS_Version == 'focal')
+
+- name: Make service file for ttyGS0
+  file:
+     path: /etc/systemd/system/serial-getty@ttyGS0.service.d
+     state: directory
+     mode: '0755'
+  ignore_errors: yes
+  when: connectbox_os == 'armbian' and (OS_Version == 'xenial' or OS_Version == 'focal') and not OZ2_present
+
+- name: copy service file over
+  template:
+     src: 10-switch-role.conf.j2
+     dest: /etc/systemd/system/serial-getty@ttyGS0.service.d/10-switch-role.conf
+     mode: '0666'
+  when: connectbox_os == 'armbian' and (OS_Version == 'xenial' or OS_Version == 'focal') and not OZ2_present
+
+- name: setup link for ttyGS0 service
+  file:
+     src: /lib/systemd/system/serial-getty@.service
+     dest: /etc/systemd/system/getty.target.wants/serial-getty@ttyGS0.service
+     state: link
+  when: (connectbox_os == 'armbian' and (OS_Version == 'xenial' or OS_Version == 'focal') and not OZ2_present)
+     
+- name: add it to default load of modules
+  command: echo 'g_serial' >> /etc/modules
+  when: connectbox_os == 'armbian' and (OS_Version == 'xenial' or OS_Version == 'focal') and not OZ2_present
+
+- name: make sure we  delete the g_mass_storage.conf if it exsists
+  file:
+    path: /etc/modules-load.d/g_mass_storage.conf
+    state: absent
+
+- name: Enable 10/100baseT on CM4
+  copy:
+    src: ethtool
+    dest: /etc/network/if-pre-up.d/ethtool
+  when: CM4_present
+
+- name: print out reboot status
+  debug:
+    msg: "Reboot status is: {{ reboot_required }} "
+
+- name: confirm reboot_required
+  pause:
+    prompt: "Are you sure you want to reboot (yes/no)? Note you need to reboot at least one time going through this loop: "
+  register: confirm_reboot
+   
 # The system takes 5-10 seconds to disappear from the network
 #  so let's wait 15 seconds before doing our first check
 #  Use newer ansible 2.7 function reboot
+
 - name: Reboot device for changes to take effect
   reboot:
-    post_reboot_delay=15
-    pre_reboot_delay=2
-  when: reboot_required
+    post_reboot_delay: 35
+    connect_timeout: 90
+    reboot_timeout: 120
+  when: (reboot_required and (confirm_reboot.user_input | bool)) or (confirm_reboot.user_input | bool)
+  tags: reboot1
+
+- name: Install PHP if this is an OrangePi Zero2 
+  apt:
+    name: php
+    state: present 
+  when: OZ2_present
+
+- name: Copy over a new dnsmasq file if were on ubuntu debian focal
+  copy: 
+    src: dnsmasq.conf
+    dest: /etc/dnsmasq.conf
+  when: (OS_Version == 'focal') and  ( ansible_os_family|lower == 'debian') and (connectbox_os == 'ubuntu') and not OZ2_present
+
+
+- name: Install fdisk 
+  apt:
+    name: fdisk
+    state: present
+
+- name: Install crda 
+  apt:
+    name: crda    
+    state: present
+
+- name: Copy over the ATTiny.bat file
+  copy:
+    src: ATTiny.bat
+    dest: /usr/bin/ATTiny.bat 
+  when: CM4_present
+
+- name: make ATTiny.bat executable
+  command: chmod +x /usr/bin/ATTiny.bat 
+  when: CM4_present
+
+- name: copy over a new avahi-daemon.conf
+  copy:
+   src: etc_avahi_avahi-daemon.conf
+   dest: /etc/avahi/avahi-daemon.conf
+  when: OZ2_present and OS_Version == "focal"
+
+- name: Copy over the default hostapd if were on ubuntu Debian
+  copy:
+    src: etc_default_hostapd
+    dest: /etc/default/hostapd
+  when: (ansible_os_family|lower == 'debian') and (connectbox_os == "ubuntu")
+
+- name: Restart dns services if were on Ubuntu Debian focal
+  command: systemctl restart dnsmasq
+  when: (OS_Version == 'focal') and  (ansible_os_family|lower == 'debian') and (connectbox_os == 'ubuntu') 
+
+- name : Increase size of /tmp to handle upcoming installs
+  command: mount -o remount, size=400M /tmp/
+  when: (ansible_os_family  == 'Ubuntu' or connectbox_os == 'armbian') and not aws_instance
 
 - name: Get current rfkill state for interface 0 (wireless LAN) on Raspbian
   command: cat /sys/class/rfkill/rfkill0/soft
   register: rfkill0_state
   ignore_errors: yes
   changed_when: False
-  when: connectbox_os == "raspbian"
+  when: ansible_os_family == 'Ubuntu' and not aws_instance
 
 # Raspbian-lite buster and onwards rfkill wlan0 by default, which causes
 #  problems when we try to start wlan0 (at hostapd reload)
 # This change persists across reboots, so it's safe to do here.
 - name: Unblock rfkill'ed interface 0 (wireless LAN) on Raspbian
   command: /usr/sbin/rfkill unblock 0
-  when: "connectbox_os == 'raspbian' and '0' not in rfkill0_state.stdout"
+  ignore_errors: yes
+  when:  ansible_os_family  == 'Debian'
 
 - name: Get current rfkill state for interface 1 (wireless LAN) on Raspbian
   command: cat /sys/class/rfkill/rfkill1/soft
-  register: rfkill1_state
+  register: rfkill1_stateXray 
   ignore_errors: yes
   changed_when: False
-  when: connectbox_os == "raspbian"
+  when: connectbox_os == 'Debian'
+
+- name: load lshw if not installed
+  apt:
+    name: lshw
+    state: present
+  
+- name: load usbutils if not installed
+  apt:
+    name: usbutils
+    state: present
+
+- name: load NTFS file system
+  apt:
+    name: ntfs-3g
+    state: present 
 
 # Raspbian-lite buster and onwards rfkill wlan1 by default, which causes
 #  problems when we try to start wlan1 (at hostapd reload)
 # This change persists across reboots, so it's safe to do here.
 - name: Unblock rfkill'ed interface 1 (wireless LAN) on Raspbian
   command: /usr/sbin/rfkill unblock 1
-  when: "connectbox_os == 'raspbian' and '0' not in rfkill1_state.stdout"
+  ignore_errors: yes
+  when: connectbox_os == 'Debian'
 
 - name: Set default locale
   lineinfile:
-    path=/etc/default/locale
-    state=present
-    line="LC_ALL=en_US.UTF-8"
-  when: connectbox_os == "armbian"
+    path: /etc/default/locale
+    line: LC_ALL=en_US.UTF-8
+    state: present
+  when: connectbox_os == 'armbian'
 
-# Needed for package upgrades via ansible (aptitude safe-upgrade)
-- name: Install aptitude
+# Remove some systrem services for NEO
+- name: Remove armbian-filesystem-resize since we do it in PxUSBm.py 
+  shell: systemctl disable armbian-filesystem-resize
+  ignore_errors: yes
+  when: NEO_present
+
+- name: Remove orangepi-resize-filesystem since we do it in PxUSBm.py
+  shell: systemctl disable armbian-resize-filesystem.service
+  ignore_errors: yes
+  when: OZ2_present
+
+# Remove the smart.service for NEO
+- name: Remove smart.service for NEO 
+  shell: systemctl disable smartd.service
+  ignore_errors: yes
+  when: connectbox_os != 'raspbian'
+
+# Remove the smartmontools.service
+- name: remove the smartmontools.service 
+  shell: systemctl disable smartmontools.service 
+  ignore_errors: yes
+  when: connectbox_os != 'raspbian' or OZ2_present
+
+#  Needed for package upgrades via ansible (aptitude safe-upgrade)
+- name: Install apt
   apt:
-    name: aptitude
+    name: apt
+    state: present
+
+- name: Install jq so that ConnectBoxManage.sh can edit brand.txt easily
+  apt:
+    name: ['jq']
     state: present
 
 # mikegleasonjr.firewall assumes iptables but Armbian doesn't ship with it
 - name: Install iptables
   apt:
-    name: iptables
     state: present
-  when: connectbox_os == "armbian"
+  when: connectbox_os == 'armbian'
 
 # Only repopulate daily so we don't slow runs down unnecessarily
 - name: Populate apt cache
@@ -117,7 +537,7 @@
 #  kernel, dtb and uboot packages from being installed (lest they
 #  overwrite our changes)
 # This task will bomb if we're running on a sunxi device and using
-#  something other than the "next" branch or using something other
+#  something other than the next branch or using something other
 #  than stretch
 # We use aptitude instead of apt-hold because aptitude's first run clears
 #  the package holds which causes us to upgrade these packages.
@@ -125,9 +545,19 @@
 #  already on hold, so it's not possible to show whether this task
 #  changed anything (and it's not worth lead-up tasks to work out
 #  whether this task would do anything i.e. using aptitude search ~ahold
-- name: Pin kernel and dtb packages
-  command: "aptitude -q hold linux-dtb-next-sunxi linux-image-next-sunxi linux-u-boot-nanopineo-next linux-stretch-root-next-nanopineo"
-  when: connectbox_os == "armbian" and "sunxi" in ansible_kernel
+
+- name: Pin kernel and dtb packages NEO
+  command: aptitude -q hold linux-dtb-current-sunxi linux-image-current-sunxi linux-u-boot-nanopineo-current linux-focal-root-current-nanopineo
+  when: (connectbox_os == 'armbian') and NEO_present
+  ignore_errors: yes
+
+- name: Pin Kernel and dtb packages Orange Pi Zero 2
+  command: aptitude -q hold linux-dtb-current-sunxi linux-image-current-sunxi
+  when: (connectbox_os == 'armbian') and OZ2_present 
+
+- name: Pin dtb packages Orange Pi Zero
+  command: aptitude -q hold linux-u-boot-orangepizero2-current linux-focal-root-current-orangepizero2
+  when: (connectbox_os == 'armbian') and OZ2_present 
 
 # If we ever allow updates of the linux-...-root device package, this will
 #  need to move into a service or some other method (noting the package
@@ -135,24 +565,56 @@
 # See https://www.kernel.org/doc/Documentation/cpu-freq/governors.txt for
 #  an explanation of the governors. The choice to use conservative was
 #  not driven by data, so choose something different if data is available.
-- name: Enable conservative CPU frequency governor on physical devices (for next restart)
+- name: Enable ondemand CPU frequency governor on physical devices (for next restart)
   lineinfile:
     path: /etc/default/cpufrequtils
     regexp: '^GOVERNOR='
-    line: 'GOVERNOR=conservative'
-  when: connectbox_os == "armbian"
+    line: 'GOVERNOR=ondemand'
+  when: connectbox_os == 'armbian'     
 
 # Needed by Debian Stretch
 - name: Install openresolv
   apt:
     name: openresolv
     state: present
-  when: ansible_lsb["id"] == "Debian"
+  when: ansible_os_family == 'Debian'
 
+- name: check that we have a valid file for resolve.conf
+  ansible.builtin.stat:
+    path: /etc/resolv.conf
+  register: res_st
+
+- name: if /etc/resolv.conf is a link delete it and create a file or is non exsistent
+  ansible.builtin.file:
+    path: /etc/resolv.conf
+    state: absent
+  when: res_st.stat.islnk
+
+- name:  if /etc/resolve.conf was a link or absent we create it
+  ansible.builtin.file:
+    path: /etc/resolv.conf
+    state: touch
+  when: res_st.stat.islnk or res_st.stat is not defined
+
+- name: check that we have dns working on Ubuntu Debian focal
+  shell:
+    echo 'nameserver 8.8.8.8\n' >> /etc/resolv.conf
+  when: (OS_Version == 'focal' or OS_Version == "Xenial") and  (ansible_os_family == 'Debian') and (connectbox_os == 'ubuntu') 
+
+
+# acl needed for good install of Postgres as per Leo-Nils 20211011
+- name: Install acl
+  apt:
+    name: acl
+    state: present
+
+- name: Set /usr/bin/python to python3 so everything runs happy
+  ansible.builtin.shell: rm -f /usr/bin/python && sleep 2 && ln -s /usr/bin/python3 /usr/bin/python
+  
 # Needed in several subsequent roles
 - name: Install packages for python virtualenv
   apt:
-    name: ['python-virtualenv', 'python-pip', 'virtualenv']
+    name: ['python3-virtualenv', 'python3-pip', 'virtualenv']
     state: present
   tags:
     - captive_portal
@@ -163,8 +625,474 @@
     name: git
     state: present
 
+- name: Move armbian-resize filesystem
+  ansible.builtin.copy:
+    src: /usr/lib/armbian/armbian-resize-filesystem
+    dest: /usr/lib/armbian-resize-filesystem
+    remote_src: yes
+    mode: preserve
+  when: connectbox_os == 'ubuntu'
+
+- name: dissable armbian-resize-filesystem service
+  command: systemctl disable armbian-resize-filesystem
+  ignore_errors: yes
+
 # See if we need to create a wlan0 interface when we're running in a sim
 #  environment i.e. running virtualised
+
 - name: Create a wlan0 interface
   command: /sbin/ip link add wlan0 type dummy
-  when: "'wlan0' not in ansible_interfaces and ansible_virtualization_type != 'NA'"
+  when: (ansible_interfaces | regex_search('wlan0') ==-1) and (ansible_virtualization_type != 'NA')
+
+
+# The log files in /var/log/connectbox and /var/log/nginx are required for the
+#  nginx service to run. Unfortunately, some un-identified start up code is deleting
+#  those directories and causing the nginx service to fail. The following three steps
+#  create the directory, install a shell script to re-establish the required directories 
+#  and log files and then run that shell script at every startup.
+- name: Create the /usr/local/connectbox/bin directory
+  file:
+    path: /usr/local/connectbox/bin
+    state: directory
+
+- name: Install CreateLogFiles.sh  
+  copy: 
+    src: usr_local_connectbox_bin_CreateLogFiles.sh
+    dest: /usr/local/connectbox/bin/CreateLogFiles.sh
+
+- name: Create connectbox group
+  group:
+    name: _connectbox
+    system: yes
+
+# Not strictly necessary but can be used for testing
+- name: Create _connectbox user and to _connectbox group
+  user:
+    name: _connectbox
+    group: _connectbox
+    system: yes
+    createhome: no
+
+- name: Install PxUSBm.py 
+  copy:
+    src: usr_local_connectbox_bin_PxUSBm.py 
+    dest: /usr/local/connectbox/bin/PxUSBm.py
+    owner: _connectbox
+    group: _connectbox
+    mode: 0555
+
+- name: Install indexer.py 
+  copy:
+    src: usr_local_connectbox_bin_indexer.py 
+    dest: /usr/local/connectbox/bin/indexer.py 
+    owner: _connectbox 
+    group: _connectbox 
+    mode: 0555
+
+- name: Change the permissions of PxUSBm.py 
+  command: chmod 644 /usr/local/connectbox/bin/PxUSBm.py 
+
+- name: Install Macchanger
+  apt:
+    name: macchanger
+    state: present 
+
+- name: copy over configuration files 
+  copy:
+    src: etc_macchanger_ifupdown.sh
+    dest: /etc/macchange/
+    owner: root 
+    group: root 
+    mode: 0644  
+
+- name: copy over the default interfaces macchanger affects
+  copy:
+    src: etc_default_macchanger
+    dest: /etc/default/macchanger
+    owner: root 
+    group: root 
+    mode: 0644
+
+- name: remove the if-pre-up.d/macchanger file
+  file:
+    path: /etc/network/if-pre-up.d/macchanger
+    state: absent    
+    
+- name: Install shutdown.sh 
+  copy:
+    src: usr_local_connectbox_bin_shutdown.sh 
+    dest: /usr/local/connectbox/bin/shutdown.sh
+    owner: _connectbox
+    group: _connectbox
+    mode: 0755
+
+- name: Install shutdownShell.sh 
+  copy:
+    src: usr_local_connectbox_bin_shutdownShell.sh 
+    dest: /usr/local/connectbox/bin/shutdownShell.sh
+    owner: _connectbox
+    group: _connectbox
+    mode: 0655
+
+- name: Install systemd for PxUSBm 
+  copy:
+    src: etc_systemd_system_PxUSBm.service
+    dest: /etc/systemd/system/PxUSBm.service
+    owner: root 
+    group: root 
+    mode: 0622
+
+- name: make poweroff directory
+  file:
+    state: directory
+    path: /usr/local/bin/poweroff
+    mode: 0655
+
+- name: copy content to poweroff
+  copy:
+    src: usr_local_bin_poweroff_poweroff
+    dest: /usr/local/bin/poweroff/poweroff 
+    mode: 0622
+
+- name: copy extra poweroff filesystem
+  copy:
+    src: usr_local_poweroff_internal
+    dest: /usr/local/bin/poweroff/_internal 
+    mode: 0655
+
+- name: enable the PxUSBm service 
+  command: systemctl enable PxUSBm.service 
+
+- name: Make connectbox directory
+  file:
+    state: directory
+    path: /usr/local/connectbox
+    mode: 0655
+
+- name: Install PIP
+  apt:
+    name: python-pip
+    state: present
+  ignore_errors: yes
+
+- name: Install PIP3
+  apt:
+    name: python3-pip
+    state: present
+  ignore_errors: yes
+
+- name: set up resize of filesystem
+  debug:
+    msg: Setting up resize of filesystem
+  notify:
+    - Install PxUSBm.py
+  changed_when: True
+
+- name: install pexpect (needed for PxUSBm.py script)
+  pip:
+    name: pexpect
+
+- name: Add items to rc.local
+  blockinfile:
+    path: /etc/rc.local
+    insertafter: "# By default this script does nothing."
+    block: |
+      # Create missing log files and restart nginx service
+      #  we need this or nginx won't run
+        sh /usr/local/connectbox/bin/CreateLogFiles.sh
+  when: not aws_instance and not OZ2_present
+
+
+- name: Add items to rc.local
+  blockinfile:
+    path: /etc/rc.local
+    insertafter: "# By default this script does nothing."
+    block: |
+      # Create missing log files and restart nginx service
+      #  we need this or nginx won't run
+        sh /usr/local/connectbox/bin/CreateLogFiles.sh 
+      # Change the way the LED's work on the OrangePi Zero2
+        echo 'mmc0' > /sys/class/leds/red\:power/trigger
+        echo 'activity' > /sys/class/leds/green\:status/trigger
+  when: not aws_instance and OZ2_present
+
+# Moved over from connectbox/tasks/main.yml by Derek Maxson 20220129
+#   So that we have access to the scripts during startup
+#
+
+- name: Configure hostname
+  copy:
+    content: "{{ connectbox_default_hostname }}\n"
+    dest: /etc/hostname
+
+- name: Add hosts entry
+  blockinfile:
+    dest: /etc/hosts
+    block: |
+      127.0.0.1  {{ connectbox_default_hostname }}
+      127.0.0.1  learn.{{ connectbox_default_hostname }}
+
+- name: Create connectbox version file
+  copy:
+    content: "{{ connectbox_version }}\n"
+    dest: /etc/connectbox-release
+
+- name: Add www-data to _connectbox group
+  user:
+    name: www-data
+    groups: _connectbox
+    append: yes
+
+- name: Empty scripts directory
+  file:
+    path: /usr/local/connectbox/bin
+    state: absent  
+
+- name: Make scripts directory
+  file:
+    state: directory
+    path: /usr/local/connectbox/bin
+    owner: _connectbox
+    group: _connectbox
+    recurse: yes
+    mode: 0755
+
+- name: Make etc directory
+  file:
+    state: directory
+    path: /usr/local/connectbox/etc
+    owner: _connectbox
+    group: _connectbox
+    mode: 0755
+
+- name: Make var directory
+  file:
+    state: directory
+    path: /usr/local/connectbox/var
+    owner: _connectbox
+    group: _connectbox
+    mode: 0775
+
+- name: Copy connectbox scripts
+  copy:
+    src: ../scripts/
+    dest: /usr/local/connectbox/bin/
+    owner: _connectbox
+    group: _connectbox
+    mode: 0755
+
+- name: Make connectbox config overrides
+  template:
+    src: connectbox.conf.j2
+    dest: /usr/local/connectbox/etc/connectbox.conf
+    backup: yes
+    owner: _connectbox
+    group: _connectbox
+    mode: 0644
+
+- name: Copy connectbox basic auth credentials
+  copy:
+    content: "{{ connectbox_admin_credentials }}"
+    dest: /usr/local/connectbox/etc/basicauth
+    owner: _connectbox
+    group: _connectbox
+    mode: 0660
+
+- name: allow connectbox group to execute connectbox scripts
+  blockinfile:
+    dest: /etc/sudoers
+    validate: /usr/sbin/visudo --check --file="%s"
+    block: |
+      %_connectbox ALL=(ALL) NOPASSWD: /bin/connectboxmanage
+      %_connectbox ALL=(ALL) NOPASSWD: /usr/local/connectbox/bin/
+
+
+- name: Copy brand.txt template
+  template:
+    src: brand_txt.j2
+    dest: /usr/local/connectbox/brand.txt
+    mode: '0666'
+
+- name: Save original brand.txt template
+  template:
+    src: brand_txt.j2
+    dest: /usr/local/connectbox/brand.j2
+    mode: '0666'
+
+- name: Check for device_type CM4
+  replace:
+    path: /usr/local/connectbox/brand.txt
+    regexp: '"Device_type": .*,'
+    replace: '"Device_type": "CM",'
+  when: CM4_present and ansible_facts['os_family'] == 'Debian'
+
+
+- name: Check if multiple-batteries are not available
+  replace:
+    path: /usr/local/connectbox/brand.txt
+    regexp: 'lcd_pages_multi_bat": .*,'
+    replace: 'lcd_pages_multi_bat": 1,'
+  when: CM4_present
+ 
+
+- name: Check for device_type PI
+  replace:
+    path: /usr/local/connectbox/brand.txt
+    regexp: '"Device_type": .*,'
+    replace: '"Device_type": "PI",'
+  when: Pi_present and  ansible_os_family  == 'Debian'
+
+- name: Check for device_type OrangePI Zero2
+  replace:
+    path: /usr/local/connectbox/brand.txt
+    regexp: '"Device_type": .*,'
+    replace: '"Device_type": "OZ2",'
+  when: OZ2_present and ansible_os_family == 'Debian'
+
+- name: for CM4 install requirements for avrdude
+  apt:
+    name: ['bison', 'automake', 'autoconf', 'flex', 'gcc-avr', 'binutils-avr', 'avr-libc', 'git']
+    state: present 
+  when: CM4_present
+
+- name: make sure we don't have old code lying around
+  file:
+    path: /tmp/avrdude
+    state: absent
+
+#- name: get the code for compiling
+#  command:
+#    cmd: git clone https://github.com/kcuzner/avrdude
+#    chdir: /tmp
+#  register: avrdude 
+#  when: CM4_present
+
+#- name: compile avrdude with bootstrap
+#  shell: 
+#  args:
+#    cmd: ./bootstrap
+#    chdir: /tmp/avrdude/avrdude
+#  when: CM4_present
+
+#- name: compile avrdude with configure
+#  shell:
+#  args:
+#    cmd: ./configure
+#    chdir: /tmp/avrdude/avrdude
+#  when: CM4_present
+
+#- name: make avrdude
+#  shell:
+#  args:
+#    cmd: make
+#    chdir: /tmp/avrdude/avrdude
+#  when: CM4_present
+
+#- name: make install
+#  shell:
+#  args:
+#    cmd: make install 
+#    chdir: /tmp/avrdude/avrdude
+#  when: CM4_present
+
+- name: install avrdude
+  apt:
+    name: avrdude
+    state: present
+  when: CM4_present
+
+- name: install smbus2
+  pip:
+    name: smbus2 
+    executable: pip3
+  ignore_errors: yes
+
+#- name: install urllib3
+#  pip:
+#    name: urllib3 
+#    executable: pip3
+
+# install urllib3 via Handler mechanism (at end of build) since it is 
+#  getting removed somewhere between here and end...
+- name: set up install of urllib3
+  debug:
+    msg: Setting up install of urllib3
+  notify:
+    - Install urllib3
+  changed_when: True
+
+
+- name: Add /usr/sbin to system-wide $PATH.
+  copy:
+    dest: /etc/profile.d/my-path.sh
+    content: 'PATH=$PATH:/usr/sbin'
+
+
+
+#- name: copy the config files
+#  copy:
+#    src: /tmp/avrdude/avrdude/avrdude.conf 
+#    dest: /etc/avrdude.conf 
+#    remote_src: yes
+#    mode: preserve
+#  when: CM4_present
+
+- name: Make connectbox test directory
+  file:
+    state: directory
+    path: /usr/local/connectbox/test
+    mode: 0755
+  when: CM4_present
+
+- name: copy test file RW_AT.py
+  copy:
+   src: usr_local_connectbox_test_RW_AT.py
+   dest: /usr/local/connectbox/test/RW_AT.py
+  when: CM4_present
+
+- name: copy test file RW_AXP209-53.py
+  copy:
+   src: usr_local_connectbox_test_RW_AXP209-53.py
+   dest: /usr/local/connectbox/test/RW_AXP209-53.py
+  when: CM4_present
+
+- name: copy test file RW_BatLog.py
+  copy:
+   src: usr_local_connectbox_test_RW_BatLog.py
+   dest: /usr/local/connectbox/test/RW_BatLog.py
+  when: CM4_present
+
+
+- name: Change avrdude config for reset pin for CM4
+  replace:
+    path: /etc/avrdude.conf
+    regexp: "reset = 25"  
+    replace: "reset = 22"
+    after: 'type = "linuxspi"'
+    before: "# some ultra"
+  when: CM4_present
+
+- name: Change avrdude config for baudrate for CM4
+  replace:
+    path: /etc/avrdude.conf
+    regexp: "baudrate=40"  
+    replace: "baudrate=20"
+    after: 'type = "linuxspi"'
+    before: "# some ultra"
+  when: CM4_present
+
+- name: Remove build tools
+  apt:
+    name: ['bison', 'automake', 'autoconf', 'flex', 'gcc-avr', 'binutils-avr', 'avr-libc']
+    state: absent 
+  when: CM4_present
+
+- name: remove build data
+  file:
+    path: /tmp/avrdude
+    state: absent
+
+
+  
+  
+

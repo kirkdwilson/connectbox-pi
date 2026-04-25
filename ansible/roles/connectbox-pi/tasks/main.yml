@@ -1,114 +1,26 @@
 ---
-- name: Configure hostname
-  hostname:
-    name: "{{ connectbox_default_hostname }}"
-
-- name: Add hosts entry
-  blockinfile:
-    dest: /etc/hosts
-    block: |
-      127.0.0.1 {{ connectbox_default_hostname }}
-
-- name: Create connectbox version file
-  copy:
-    content: "{{ connectbox_version }}\n"
-    dest: /etc/connectbox-release
-
-- name: Create connectbox group
-  group:
-    name: _connectbox
-    system: yes
-
-# Not strictly necessary but can be used for testing
-- name: Create _connectbox user and to _connectbox group
-  user:
-    name: _connectbox
-    group: _connectbox
-    system: yes
-    createhome: no
-
-# TODO confirm this works as expected
-- name: Add www-data to _connectbox group
-  user:
-    name: www-data
-    groups: _connectbox
-    append: yes
-
-- name: Make scripts directory
-  file:
-    state: directory
-    path: /usr/local/connectbox/bin
-    owner: _connectbox
-    group: _connectbox
-    recurse: yes
-    mode: 0755
-
-- name: Make etc directory
-  file:
-    state: directory
-    path: /usr/local/connectbox/etc
-    owner: _connectbox
-    group: _connectbox
-    mode: 0755
-
-- name: Make logs directory
-  file:
-    state: directory
-    path: "{{ connectbox_log_dir }}"
-    owner: _connectbox
-    group: _connectbox
-    recurse: yes
-    mode: 0755
-
-- name: Make var directory
-  file:
-    state: directory
-    path: /usr/local/connectbox/var
-    owner: _connectbox
-    group: _connectbox
-    mode: 0775
-
-- name: Copy connectbox scripts
-  copy:
-    src: ../scripts/
-    dest: /usr/local/connectbox/bin/
-    owner: _connectbox
-    group: _connectbox
-    mode: 0755
-
-- name: Make connectbox config overrides
-  template:
-    src: connectbox.conf.j2
-    dest: /usr/local/connectbox/etc/connectbox.conf
-    backup: yes
-    owner: _connectbox
-    group: _connectbox
-    mode: 0644
-
-- name: Copy connectbox basic auth credentials
-  copy:
-    content: "{{ connectbox_admin_credentials }}"
-    dest: /usr/local/connectbox/etc/basicauth
-    owner: _connectbox
-    group: _connectbox
-    mode: 0660
-
-- name: allow connectbox group to execute connectbox scripts
-  blockinfile:
-    dest: /etc/sudoers
-    validate: /usr/sbin/visudo --check --file="%s"
-    block: |
-      %_connectbox ALL=(ALL) NOPASSWD: /usr/local/connectbox/bin/
-
 - name: expire chat messages
   cron:
+    name: expire_chat
     minute: "0,15,30,45"
     job: "curl -XDELETE http://127.0.0.1:{{ gunicorn_listen_port }}/chat/messages > /dev/null"
 
+- name: ensure PxUSBm is running
+  cron:
+    name: PxUSBM test for running
+    day: "*"
+    hour: "*"
+    minute: "*"
+    month: "*"
+    weekday: "*"
+    user: root
+    job:  "python3 /usr/local/connectbox/bin/TestPxUSBm.py > /dev/nul"
+
 - name: install access-log-analyzer
   git:
-    repo: '{{access_log_analyzer_repo}}'
+    repo: '{{ access_log_analyzer_repo }}'
     dest: /usr/local/access-log-analyzer
+    version: '{{ access_log_repo_rev }}'
 
 - name: Make access-log-analyzer etc directory
   file:
@@ -134,6 +46,12 @@
     owner: _connectbox
     group: _connectbox
     mode: 0644
+
+#- name: Clean up the Reports Device hostname
+#  command: sed -i 's/ConnectBox/{{ connectbox_pretty_hostname }}/g' /usr/local/access-log-analyzer/published/index.html
+
+#- name: Clean up the Reports Device hostname 2
+#  command:  sed -i 's/ConnectBox/{{ connectbox_pretty_hostname }}/g' /usr/local/access-log-analyzer/public/index.html
 
 - name: Make hourly logrotate config
   template:
@@ -169,7 +87,7 @@
 #  disabling (or the control session if pipelining is in use)
 - name: Schedule disabling of sshd
   set_fact:
-    final_command: "systemctl disable ssh && systemctl stop ssh"
+    final_command: "systemctl disable ssh"
   when: not developer_mode
 
 # Run the final commands in a handler so any disabling is performed right at
@@ -178,10 +96,7 @@
 #  unclear how handlers are ordered when multiple roles fire handlers.
 #
 # This is a no-op force the handler to run (assuming the conditional passes)
-- name: Schedule task to do final disabling
-  assert:
-    that:
-      - True
-  when: final_command != ""
-  changed_when: True
+- name: Trigger final disabling commands if final_command is set
+  command: "true"  # A no-op command that always succeeds
+  when: final_command | length > 0
   notify: Run final disabling commands

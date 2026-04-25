@@ -1,16 +1,20 @@
 ---
 dependencies:
   - bootstrap
-  - { role: hat-service, when: '"NanoPi NEO" in machine_type.stdout' }
-  - dns-dhcp
-  - network-interfaces
-  - wifi-ap
-  - mikegleasonjr.firewall
+  - { role: hat-service, when: not aws_instance }
+  - { role: dns-dhcp, when: not aws_instance }
+  - { role: network-interfaces, when: not aws_instance }
+  - { role: wifi-ap, when: not aws_instance }
+  - { role: mikegleasonjr.firewall, when: not aws_instance }
+#  - { role: php, when: build_moodle}
+#  - { role: ansible-postgresql, when: build_moodle}
+#  - { role: moodle, when: build_moodle}
+  - { role: enhanced-content, when: enhanced_interface}
   - nginx
   - captive-portal
   - webserver-content
   - usb-content
-  - sample-content
+  - { role: sample-content, when: not enhanced_interface}
   - rpi-permissions
-  - wlan-set
+  - { role: wlan-set, when: not aws_instance }
   - remove-lz4

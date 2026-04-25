@@ -11,14 +11,21 @@ ctrl_interface_group=0
 ssid={{ ssid }}
 utf8_ssid=1
 
-country_code=00
+country_code={{ wireless_country_code }}
 
 # Enable 802.11n (requires hw_mode=g)
 hw_mode=g
-ieee80211n=1
+# ieee80211n=1
+driver=nl80211
 
 channel={{ wireless_channel }}
 macaddr_acl=0 # accept unless in deny list
+
+max_num_sta=30
+#ap_max_inactivity = 240
+#dissassoc_low_ack=1
+
+ap_isolate=1
 
 # Disable non-OFDM rates given they consume disproportiately large amounts
 #  of airtime and aren't required for modern devices
@@ -39,3 +46,5 @@ wmm_enabled=1  # QOS
 ht_capab=
 vht_capab=
 ieee80211ac=0
+# This is the orignal Github version
+
