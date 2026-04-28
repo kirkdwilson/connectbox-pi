@@ -1,0 +1,224 @@
+---
+- name: create folders for default content/shared and config
+  file:
+    path: "{{ item }}"
+    state: directory
+    owner: www-data
+    group: www-data
+    mode: 0775
+  with_items:
+    - "/var/www/enhanced"
+    - "/var/www/enhanced/content"
+    - "/var/www/enhanced/admin"
+    - "/var/www/enhanced/connectbox-manage"
+
+- name: Install zip 
+  apt:
+    name: zip
+    state: present
+
+- name: Install unzip 
+  apt:
+    name: unzip
+    state: present
+
+- name: Install wget 
+  apt:
+    name: wget
+    state: present
+
+# Install ffmpeg to handle mpeg 
+- name: Install ffmpeg to handle thumbnails for interface
+  apt:
+    pkg:
+    - ffmpeg
+
+- name: Get media interface latest release
+  ansible.builtin.unarchive:
+    # was: https://github.com/RT-coding-team/mediainterface/releases/download/latest/latest.zip
+    src: https://github.com/Connectbox/mediainterface/releases/download/latest/latest.zip
+    dest: /var/www/enhanced/content/
+    remote_src: yes
+    owner: www-data
+    group: www-data
+    mode: 0775
+
+- name: Get admin interface latest release
+  ansible.builtin.unarchive:
+    # was: https://github.com/RT-coding-team/cbadmin/releases/download/latest/latest.zip
+    src: https://github.com/ConnectBox/cbadmin/releases/download/latest/latest.zip
+    dest: /var/www/enhanced/admin/
+    remote_src: yes
+    owner: www-data
+    group: www-data
+
+- name: Install python2 requests library
+  command: >
+    pip3 install requests 
+
+- name: Install python3 pathlib library
+  command: >
+    pip3 install pathlib
+
+#- name: Download script to add node to apt cache
+#  get_url:
+#    url: https://github.com/nodesource/distributions/blob/master/scripts/rpm/setup_16.x
+#    dest: /tmp/setup_16.sh
+#    mode: '0755'
+#  when: connectbox_os == "armbian"
+
+- name: Add node to apt cache
+  command: "curl -fsSL https://raw.githubusercontent.com/nodesource/distributions/refs/heads/master/scripts/deb/setup_16.x -o /root/setup_16x.sh"
+  become: true
+  when: connectbox_os == 'armbian'
+
+- name: Continue to Add node to apt cache
+  command: "sudo -E bash /root/setup_16x.sh"
+  become: true
+  when: connectbox_os == 'armbian'
+
+- name: apt install nodjs for armbian
+  command: "sudo apt-get install -y nodejs"
+  when: connectbox_os == "armbian"
+
+- name: Install nodejs for connectbox-manage when not armbian
+  apt:
+    name: nodejs
+    state: present
+  when: connectbox_os != 'armbian'
+
+- name: show the node version that we instailled
+  command: node --version
+  register: node_ver
+
+- name: print the node version
+  debug:
+    msg: "We loaded node version {{ node_ver.stdout }}"
+
+- name: make sure npm is instailled
+  apt:
+    name: npm
+    state: present
+  when: connectbox_os != "armbian"
+
+- name: Install pm2 -- node process manager for connectbox-manage
+  community.general.npm:
+    name: pm2
+    global: yes
+    state: present
+  become: true  
+
+- name: get the pm2 version we loaded
+  command: pm2 --version
+  register: pm2_ver
+
+- name: display the version of pm2 we loaded
+  debug:
+    msg: "we loaded version {{ pm2_ver.stdout }} of PM2"
+
+- name: Get connectbox-manage repo from https://github.com/ConnectBox/connectbox-manage.git
+  git:
+    # was: https://github.com/RT-coding-team/connectbox-manage.git
+    repo: https://github.com/ConnectBox/connectbox-manage.git
+    dest: /var/www/enhanced/connectbox-manage
+    clone: yes
+    update: yes
+  ignore_errors: yes
+
+- name: Run npm to install dependencies for connectbox-manage
+  community.general.npm:
+    path: /var/www/enhanced/connectbox-manage
+  ignore_errors: yes
+
+
+- name: Re-Run npm to verify install ok after possible update in version
+  community.general.npm:
+    path: /var/www/enhanced/connectbox-manage
+    
+- name: Delete existing pm2 processes
+  command: "pm2 delete all"
+  ignore_errors: yes
+
+- name: Pause for pm2
+  pause:
+    seconds: 2
+
+- name: Start pm2 for connectbox-manage
+  command: "pm2 start /var/www/enhanced/connectbox-manage/src/index.js"
+  become: true
+
+- name: Pause for pm2
+  pause:
+    seconds: 2
+
+- name: Get pm2 status and check for process online
+  shell:
+    cmd: "pm2 status |grep index |grep online"
+  become: true
+  register: pm2status
+  failed_when: pm2status.stdout == ""
+
+- name: Save pm2 config
+  shell:
+    cmd: "pm2 save"
+  become: true
+
+- name: Run pm2 startup to retain pm2 config on reboot
+  shell:
+    cmd: "pm2 startup"
+  become: true
+
+- name: Install cron package required by phonehome.python
+  apt:
+    name: cron
+    state: present 
+
+- name: Cause phonehome.py to execute every 10 minutes via cron IF not a Moodle box  (We have different process for Moodle)
+  ansible.builtin.cron:
+    name: "phonehome.py"
+    minute: "*/10"
+    user: www-data
+    job: "/usr/bin/python /usr/local/connectbox/bin/phonehome.py >/tmp/push_messages.log  2>&1"
+
+- name: Update hostname in MMI
+  replace:
+    path: /var/www/enhanced/content/www/assets/content/en/data/interface.json
+    regexp: 'hostname'
+    replace: '{{ connectbox_default_hostname }}'
+
+- name: Copy MMI loader to /usr/local/connectbox/bin
+  get_url:
+    # was: https://raw.githubusercontent.com/RT-coding-team/mediainterface/main/mmiloader.py
+    url: https://raw.githubusercontent.com/connectbox/mediainterface/main/main/mmiloader.py
+    dest: /usr/local/connectbox/bin/mmiLoader.py
+    owner: _connectbox
+    group: _connectbox
+    mode: '0755'
+
+- name: Copy MMI loader to /usr/local/connectbox/bin
+  get_url:
+    # was: https://raw.githubusercontent.com/RT-coding-team/mediainterface/main/lazyLoader.py
+    url: https://raw.githubusercontent.com/connectbox/mediainterface/main/main/lazyLoader.py
+    dest: /usr/local/connectbox/bin/lazyLoader.py
+    owner: _connectbox
+    group: _connectbox
+    mode: '0755'
+
+- name: Create file to access connectboxmanage as command line
+  become: true
+  copy:
+    src: bin_connectboxmanage
+    dest: /bin/connectboxmanage
+    mode: '0755'
+
+- name: Check that we have a directory for connectbox_log_dir
+  command: mkdir {{connectbox_log_dir}}
+  ignore_errors: True
+
+- name: Make log file location under connectbox log directory for enhanced content stats
+  copy:
+    src: connectbox_enhanced.json
+    dest: "{{connectbox_log_dir}}/connectbox_enhanced.json"
+    owner: www-data
+    group: adm
+    mode: '0644'

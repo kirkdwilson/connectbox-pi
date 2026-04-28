@@ -1,31 +1,4 @@
 ---
-- name: Get rt8812au wifi driver
-  get_url:
-    url: https://github.com/ConnectBox/connectbox-pi/blob/master/ansible/8812au.ko
-    dest: /tmp/8812au.ko
-  when: connectbox_os == "raspbian" 
-
-- name: Create /lib/modules/5.10.11... directory
-  file:
-    dest: /lib/modules/5.10.11-v7l+/kernel/drivers/net/wireless/
-    mode: 644
-    state: directory
-  when: connectbox_os == "raspbian" 
-
-- name: Install rt8812au wifi driver
-  command: >
-    install -p -m 644 
-    /tmp/8812au.ko 
-    /lib/modules/5.10.11-v7l+/kernel/drivers/net/wireless/
-  become: yes
-  when: connectbox_os == "raspbian" 
-
-- name: Create rt8812au dependency file
-  command: /sbin/depmod -a 5.10.11-v7l+
-  become: yes
-  when: connectbox_os == "raspbian" 
-
-  
 - name: Install hostapd
   apt:
     name: hostapd
@@ -35,6 +8,7 @@
   apt:
     name: crda
     state: present
+  when: connectbox_os == "raspbian"
 
 - name: Copy hostapd config
   template:
@@ -44,6 +18,15 @@
     group: root
     mode: 0644
   register: etc_hostapd_hostapd_conf
+
+- name: Copy default hostapd 
+  template:
+    src: etc_default_hostapd_hostapd.conf.j2
+    dest: /etc/default/hostapd
+    owner: root
+    group: root
+    mode: 0644
+  register: etc_default_hostapd_hostapd_conf
 
 # wifi-configurator is used on configure_hostapd.sh
 - name: Make wifi-configurator virtualenv directory
@@ -56,6 +39,20 @@
     virtualenv: "{{ wifi_configurator_virtualenv_dir }}"
     virtualenv_python: python3
     name: git+https://github.com/ConnectBox/wifi-configurator.git
+
+- name: Find python path variable
+  shell: ls {{ wifi_configurator_virtualenv_dir }}/lib
+  register: python_ver
+
+- name: Python_ver debug
+  debug:
+    msg: "Python version is: {{ python_ver.stdout }}"
+
+- name: Set hostapd to correct default wlan
+  replace:
+    path: "{{ wifi_configurator_virtualenv_dir }}/lib/{{ python_ver.stdout }}/site-packages/wifi_configurator/cli.py"
+    regexp: 'default="wlan0"'
+    replace: 'default="{{ client_facing_if }}"'
 
 - name: Populate /etc/default/crda with regulatory domain override
   template:
@@ -71,9 +68,10 @@
 # Note: this is not a handler because wlan0/hostapd might be broken in later steps
 # before the handler would be executed. This ensures that wlan0 will be up and
 # hostapd properly running before exiting this role.
-- name: Reload hostapd
+- name: Reload hostapd -- Allow ignore errors for devices without WLAN 
   shell: "ifdown {{ client_facing_if }}; sleep 1; ifup {{ client_facing_if }}"
   when: etc_hostapd_hostapd_conf.changed
+  ignore_errors: yes
   tags:
     # This task on change is intentionally not a handler; don't trigger ANSIBLE0016
     - skip_ansible_lint
