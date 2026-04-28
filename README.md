@@ -1,8 +1,8 @@
 [![Build Status](https://travis-ci.org/ConnectBox/connectbox-pi.svg?branch=master)](https://travis-ci.org/ConnectBox/connectbox-pi)
 
-# TheWell version of ConnectBox
+# This version of ConnectBox
 
-TheWell is a variant of ConnectBox that adds Moodle Learning Management System (v. 3.9.3), PHP (v. 7.4) and MySQL (MariaDB) (vv 10.3) to bring training system and learning content to the ConnectBox platform.
+TheWell is a old variant of ConnectBox that adds Moodle Learning Management System (v. 3.9.3), PHP (v. 7.4) and MySQL (MariaDB) (vv 10.3) to bring training system and learning content to the ConnectBox platform.
 
 Summary Of Changes:
 * ConnectBox Ansible roles are updated to build ConnectBox with Moodle, PHP and MySQL
