@@ -9,6 +9,7 @@ import shutil
 import mimetypes
 import logging
 import subprocess
+import sys
 import time
 from indexer import *
 #import ffmpeg
@@ -50,12 +51,11 @@ def mmiloader_code():
 	# Handel memory issues  by setting up automated free memory
 	######################################################
 
-	run_cmd("sync && echo 3 > sudo tee /proc/sys/vm/drop_caches")						#Try to clear any cach data that we have to maximize memory availability
+	run_cmd("sync && echo 3 | sudo tee /proc/sys/vm/drop_caches")						#Try to clear any cach data that we have to maximize memory availability
 
 
 	mains = {}        # This object contains all the data to construct each main.json at the end.  We add as we go along
 	logging.info("Starting a run of mmiLoader.py to index the data contents and create the user interface")
-	complex = 0 															#Cpunter of complex file directories we have (top directories)
 
 	# Clear the comsFileName directory so we dont have a screen on
 
@@ -88,11 +88,9 @@ def mmiloader_code():
 		print ("DONE")
 		time.sleep(3)
 		try:
-			x = os.system("rm " + comsFileName)
-			x = os.waitstatus_to_exitcode(x)
-			while x!=0:
-				x = os.system("rm " + comsFileName)
-				x = os.waitstatus_to_exitcode(x)
+			for _ in range(5):
+				if os.waitstatus_to_exitcode(os.system("rm " + comsFileName)) == 0:
+					break
 				time.sleep(1)
 		except Exception as e:
 			pass											#Clear the display
@@ -138,7 +136,6 @@ def mmiloader_code():
 	print ("brand Aquired")
 
 	# Sanity Checks
-	error = 0
 	if not brand.get('Brand') or len(brand['Brand']) < 5:
 		try:
 			brand['Brand'] = subprocess.check_output(['hostname'], text=True).strip()
@@ -162,7 +159,7 @@ def mmiloader_code():
 	f.close()
 	interface["APP_NAME"] = brand["Brand"]
 
-	if brand["enhancedInterfaceLogo"] != "" :
+	if brand.get("enhancedInterfaceLogo", "") != "" :
 	        interface["APP_LOGO"] = brand["enhancedInterfaceLogo"]
 	else:
 	        interface["APP_LOGO"] =  brand["Logo"]
@@ -360,7 +357,7 @@ def mmiloader_code():
 				for d in dirs:										#Now lets check the directories under the path
 					for pathname, dirname, filename in os.walk(os.path.join(path,d)):
 						if ((len(dirname) > 0) and (len(filename) <= 2)):			#This looks like a complex directory we need to add to the list
-							if ('index.html' in filename) and (len(filename == 1)):
+							if ('index.html' in filename) and (len(filename) == 1):
 								print("FOUND MY INDEX/HTML FILE")
 								pass
 							elif ('Start_Here.htm' in filename):
@@ -405,7 +402,7 @@ def mmiloader_code():
 		print ("====================================================")
 		print ("Evaluating Directory: " + thisDirectory)
 
-		shortPath = path.replace(mediaDirectory + '/d','')
+		shortPath = path.replace(mediaDirectory + '/','')							#Relative path from media root
 		# These next two lines ignore directories and files that start with .
 		files = [f for f in files if not f[0] == '_']							#Normalize files again
 		dirs[:] = [d for d in dirs if not d[0] == '_']							#Normalize directories again
@@ -511,9 +508,8 @@ def mmiloader_code():
 
 		print ("our evaluation of testing for web elements is finished we have go forward at: "+str(y)+ " , current directoryType is: " + directoryType + "yy: "+str(yy))
 
-		if ((yy == 1) and (y == 0)): y = 0								# if we have go forward on extended but not web then we don't go forward.
-		elif ((yy == 0) and (y == 1)): y = 0								# if we have go forward on webdirectory but not on extended directory we don't go forward
-		else: y = 1
+		if (yy == 1) and (y == 1): y = 1								# both checks say go forward — process this directory
+		else: y = 0											# either check said skip — do not process
 
 
 		##########################################################################
@@ -717,7 +713,6 @@ def mmiloader_code():
 			# Get certain data about the file and path
 			fullFilename = path + "/" + filename									# Example /media/usb0/content/video.mp4
 			shortName = pathlib.Path(path + "/" + filename).stem							# Example  video      (ALSO, slug is a term used in the BoltCMS mediabuilder that I'm adapting here)
-			relativePath = path.replace(mediaDirectory + '/','')
 			slug = (os.path.basename(fullFilename).replace('.','-')).replace('--','-')				# Example  video.mp4
 			extension = (pathlib.Path(path + "/" + filename).suffix).lower()					# Example  .mp4
 			print(" Slug is now: "+slug)
@@ -792,7 +787,7 @@ def mmiloader_code():
 			print ("	Determining Mimetype of " + extension)
 			if (content["mimeType"]):
 				print ("	mimeType already determined to be " + content["mimeType"])
-			elif (hasattr(types[extension],"mimeType")):
+			elif ("mimeType" in types[extension]):
 				content["mimeType"] = types[extension]["mimeType"]
 				print ("	mimetypes types.json says: " + content["mimeType"])
 			elif (mimetypes.guess_type(fullFilename)[0] is not None):
@@ -801,7 +796,7 @@ def mmiloader_code():
 			else:
 				content["mimeType"] = "application/octet-stream"
 				print ("	Default mimetype: " + content["mimeType"])
-				collection['image'] = 'apps.png'
+				if 'collection' in locals(): collection['image'] = 'apps.png'
 
 			print("        Media Type is: "+ content["mediaType"])
 
@@ -875,7 +870,7 @@ def mmiloader_code():
 				if not os.path.isfile( mediaDirectory + "/.thumbnail-" + language + "-" + slug + ".png"):
 					try:
 						run_cmd("ffmpeg -y -i '" + fullFilename + "' -an -c:v copy '" + mediaDirectory + "/.thumbnail-" + language + "-" + slug + ".png'  >/dev/null 2>&1")
-						if os.path.isfile(mediaDirectory + "./thumbnail-" + language + "-" + slug + ".png"):
+						if os.path.isfile(mediaDirectory + "/.thumbnail-" + language + "-" + slug + ".png"):
 							content["image"]= slug + ".png"
 							if (os.path.getsize( mediaDirectory + '/.thumbnail-' + language + '-' + slug + '.png') > 100):
 								print("mp3 thumbnail image created")
@@ -1019,22 +1014,20 @@ def mmiloader_code():
 		print ("No valid content found on the USB.  Exiting")
 
 		try:
-			x = os.system("rm " + comsFileName)
-			x = os.waitstatus_to_exitcode(x)
-			while x!=0:
-				x = os.system("rm " + comsFileName)
-				x = os.waitstatus_to_exitcode(x)
+			for _ in range(5):
+				if os.waitstatus_to_exitcode(os.system("rm " + comsFileName)) == 0:
+					break
 				time.sleep(1)
 		except Exception as e:
 			pass											#Clear the display
 
-			try:
-				run_cmd('rm '+ complex_dir)
-			except Exception as e:
-				logging.debug(f"Ignored exception: {e}")
-				pass
+		try:
+			run_cmd('rm '+ complex_dir)
+		except Exception as e:
+			logging.debug(f"Ignored exception: {e}")
+			pass
 
-			sys.exit()
+		sys.exit()
 
 	# Determine which language should be default.  It is english or first one found
 	hasDefault = 0
@@ -1061,11 +1054,9 @@ def mmiloader_code():
 		pass
 
 	try:
-		x = os.system("rm " + comsFileName)
-		x = os.waitstatus_to_exitcode(x)
-		while x!=0:
-			x = os.system("rm " + comsFileName)
-			x = os.waitstatus_to_exitcode(x)
+		for _ in range(5):
+			if os.waitstatus_to_exitcode(os.system("rm " + comsFileName)) == 0:
+				break
 			time.sleep(1)
 	except Exception as e:
 		pass											#Clear the display
