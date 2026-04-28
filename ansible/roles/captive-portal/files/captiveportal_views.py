@@ -1,7 +1,6 @@
 import ipaddress
 import time
 from flask import jsonify, redirect, render_template, request, Response, url_for
-import requests
 from ua_parser import user_agent_parser
 
 from captiveportal import app
@@ -54,21 +53,34 @@ def device_requires_ok_press(ua_str):
     This user agent detection is against the ua that shows the text, rather
     than one of the other UAs that performs connectivity testing
 
-    Currently, only Android >= 6 needs an OK press.
+    Android >= 6 needs an OK press. Android 7.1+ uses an X11-style UA string
+    in its captive portal browser (not the Dalvik agent), so "Android" does
+    not appear in the UA — we must handle that case separately.
     """
-    if "Android" not in ua_str:
+    user_agent = user_agent_parser.Parse(ua_str)
+    os_family = user_agent["os"]["family"]
+
+    # iOS and MacOS never need the OK button
+    if os_family in ("iOS", "Mac OS X"):
         return False
 
-    user_agent = user_agent_parser.Parse(ua_str)
-    # Don't assume that everything has an os.major that can be cast to an int
-    #  but as old android devices are tolerant of an OK button press (even
-    #  though the UX isn't idea) and newer Android devices with cellular plans
-    #  simply won't work without one, we show the OK button if we can't work
-    #  out what to do
-    try:
-        return int(user_agent["os"]["major"]) >= 6
-    except (ValueError, TypeError):
-        return True
+    if os_family == "Android":
+        # Don't assume that everything has an os.major that can be cast to an int
+        #  but as old android devices are tolerant of an OK button press (even
+        #  though the UX isn't ideal) and newer Android devices with cellular plans
+        #  simply won't work without one, we show the OK button if we can't work
+        #  out what to do
+        try:
+            return int(user_agent["os"]["major"]) >= 6
+        except (ValueError, TypeError):
+            return True
+
+    # Android 7.1+ captive portal browser identifies as an X11 agent
+    # (ua_parser reports os_family as "Other", not "Android").
+    # The OK button POST to /generate_204 is what sets the ack flag that
+    # causes android_cpa_needs_204_now() to return True and complete the
+    # captive portal handshake — without it the device stays in portal state.
+    return True
 
 
 def get_link_type(ua_str):
@@ -106,7 +118,6 @@ def android_cpa_needs_204_now():
     to cellular if it doesn't get a 204 at the right time.
     """
     ua_str = request.headers.get("User-agent", "")
-    user_agent = user_agent_parser.Parse(ua_str)
 
     if "Android" not in ua_str:
         # We're the "X11" agent in Android 7.1+
