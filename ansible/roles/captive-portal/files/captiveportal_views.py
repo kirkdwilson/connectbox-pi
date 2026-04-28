@@ -93,19 +93,32 @@ def get_link_type(ua_str):
      don't want that, so we just show text
     """
     user_agent = user_agent_parser.Parse(ua_str)
-    if user_agent["os"]["family"] == "iOS" and \
-            user_agent["os"]["major"] in ("9", "11"):
-        # iOS 9 and iOS 11 can open links from the captive portal browser
-        #  in the system browser. iOS 10 cannot - the link opens in the
-        #  captive portal browser itself.
-        return LINK_OPS["HREF"]
 
-    if user_agent["os"]["family"] == "Mac OS X" and \
-            user_agent["os"]["major"] == "10" and \
-       user_agent["os"]["minor"] in ("12", "13"):
-        # Sierra (10.12) and High Sierra (10.13) can open links from the
-        #  captive portal browser in the system browser
-        return LINK_OPS["HREF"]
+    if user_agent["os"]["family"] == "iOS":
+        # iOS 9+ can open links in Safari from the captive portal browser,
+        #  EXCEPT iOS 10 which opens links inside the captive portal browser.
+        # iOS 14+ uses WKWebView which also supports opening links in Safari.
+        try:
+            major = int(user_agent["os"]["major"])
+            if major >= 9 and major != 10:
+                return LINK_OPS["HREF"]
+        except (ValueError, TypeError):
+            pass
+        return LINK_OPS["TEXT"]
+
+    if user_agent["os"]["family"] == "Mac OS X":
+        # Sierra (10.12) and later, including macOS 11 (Big Sur) through
+        #  macOS 15 (Sequoia), can open links from the captive portal browser.
+        # ua_parser reports macOS 11+ as major=10 minor=16 or major=11+
+        #  depending on version, so check both forms.
+        try:
+            major = int(user_agent["os"]["major"])
+            minor = int(user_agent["os"]["minor"] or "0")
+            if major >= 11 or (major == 10 and minor >= 12):
+                return LINK_OPS["HREF"]
+        except (ValueError, TypeError):
+            pass
+        return LINK_OPS["TEXT"]
 
     return LINK_OPS["TEXT"]
 
