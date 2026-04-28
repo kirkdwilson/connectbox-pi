@@ -25,23 +25,7 @@
   pip:
     virtualenv: "{{ captiveportal_virtualenv_dir }}"
     virtualenv_python: python3
-    name: git+https://github.com/ConnectBox/simple-offline-captive-portal.git
-  notify:
-    - Restart captiveportal
-
-- name: Find installed captiveportal views.py
-  find:
-    paths: "{{ captiveportal_virtualenv_dir }}"
-    patterns: "views.py"
-    recurse: yes
-  register: captiveportal_views_find
-
-- name: Deploy modified captive portal views (Windows 11 + RFC 8908 support)
-  copy:
-    src: captiveportal_views.py
-    dest: "{{ item.path }}"
-  loop: "{{ captiveportal_views_find.files }}"
-  when: captiveportal_views_find.matched > 0
+    name: git+https://github.com/ConnectBox/simple-offline-captive-portal.git@test1
   notify:
     - Restart captiveportal
 
