@@ -3,8 +3,13 @@
 # Note: OS specific variables are included in the order of the hierarchy of their fork:
 #
 # Debian─┬─Ubuntu───Armbian
-#        ├─Raspbian
-#        └─Armbian
+#        ├─Raspbian───Buster
+#        |           └─Bullseye
+#        └─Armbian─┬─stretch
+#                  └─focal
+#                  └─xenial
+#                  └─Buster
+#                  └─Bullseye
 #
 # (See also https://github.com/ConnectBox/connectbox-pi/wiki/Differentiating-platform-by-ansible-variables)
 
@@ -16,6 +21,8 @@
       include_vars: "group_vars/{{ ansible_distribution|lower }}"
     - name: Include Target specific variables
       include_vars: "group_vars/{{ ansible_lsb['id']|lower }}"
+    - name: Include Brand Variables for brand.txt
+      include_vars: "group_vars/brand"
     - name: Check for Armbian info
       stat:
         path: "/etc/armbian.txt"
@@ -24,6 +31,9 @@
       stat:
         path: "/etc/armbian-release"
       register: armbian_release_file
+    - name: Show aws_instance variable
+      debug: 
+        var: aws_instance
     - name: Include Armbian specific variables
       include_vars: "group_vars/armbian"
       when: armbian_file.stat.exists == True or armbian_release_file.stat.exists == True
@@ -37,7 +47,10 @@
       register: machine_type
       ignore_errors: yes
       changed_when: False
+#    - name: Is this a Moodle Box?
+#      debug: 
+#        var: build_moodle
   become: yes
-  roles:
+  roles:     
     - connectbox-pi
     - { role: image-preparation, when: do_image_preparation }

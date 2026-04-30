@@ -4,20 +4,48 @@
     name: nginx-light
     state: present
 
+
+- name: Make nginx logs directory
+  file:
+    state: directory
+    path: "/var/log/connectbox/"
+    owner: www-data
+    group: www-data
+    recurse: yes
+    mode: 0755
+
 - name: Remove OS default nginx vhost
   file:
     path: "{{ nginx_enabled_vhosts_path }}/default"
     state: absent
 
-# Remove old geerlingguy.nginx vhosts configuration
-# This task can be removed once we have transitioned all our connectbox
-# instances to this multi-vhost definition arrangement
-- name: Remove old-style nginx vhost definition
+- name: Make connectbox logs directory under /var/log
   file:
-    path: "{{ nginx_enabled_vhosts_path}}/vhosts.conf"
-    state: absent
-  notify: restart nginx
+    state: directory
+    path: "{{ connectbox_log_dir }}"
+    owner: root
+    group: root
+    recurse: yes
+    mode: 0755
 
+- name: Create nginx directory under /var/log
+  file:
+    state: directory
+    path: "{{ nginx_log_dir }}"
+    owner: root
+    group: root
+    recurse: yes
+    mode: 0755
+
+- name: Create nginx log file
+  file:
+    path: "{{ nginx_log_dir }}/error.log"
+    state: touch 
+    mode: "u=rw,g=rw,o=rw"
+    
+- name: Remove all existing sites-enabled
+  shell: /bin/rm -rf /etc/nginx/sites-enabled/*
+  
 - name: Copy nginx config
   template:
     src: nginx.conf.j2
@@ -37,23 +65,55 @@
   notify: restart nginx
   with_items:
     - { src: "{{ nginx_vhost_file_captive_portal }}.j2", dest: "{{ nginx_vhost_file_captive_portal }}" }
-    - { src: "{{ nginx_vhost_file_icon_only }}.j2", dest: "{{ nginx_vhost_file_icon_only }}" }
+    - { src: "{{ nginx_vhost_file_enhanced }}.j2", dest: "{{ nginx_vhost_file_enhanced }}" }
+    - { src: "{{ nginx_vhost_file_classic }}.j2", dest: "{{ nginx_vhost_file_classic }}" }
     - { src: "{{ nginx_vhost_file_static_site }}.j2", dest: "{{ nginx_vhost_file_static_site }}" }
+    - { src: "{{ nginx_vhost_file_icon_only }}.j2", dest: "{{ nginx_vhost_file_icon_only }}" }
 
+#- name: Copy vhost config for Moodle
+#  template:
+#    src: "{{ item.src }}"
+#    dest: "{{ nginx_available_vhosts_path }}/{{ item.dest }}"
+#    mode: 0644
+#    owner: root
+#    group: root
+#  notify: restart nginx
+#  with_items:
+#    - { src: "{{ nginx_vhost_file_moodle }}.j2", dest: "{{ nginx_vhost_file_moodle }}" }
+#  when: build_moodle
+  
 - name: Create nginx active vhost symlink for captive portal vhost
   file:
     src: "{{ nginx_available_vhosts_path }}/{{ nginx_vhost_file_captive_portal }}"
     dest: "{{ nginx_enabled_vhosts_path }}/{{ nginx_vhost_file_captive_portal }}"
     state: link
     force: yes
-  notify: restart nginx
 
-- name: Create nginx active vhost symlink for selected interface
+#- name: Create nginx active vhost symlink for Moodle vhost
+#  file:
+#    src: "{{ nginx_available_vhosts_path }}/{{ nginx_vhost_file_moodle }}"
+#    dest: "{{ nginx_enabled_vhosts_path }}/{{ nginx_vhost_file_moodle }}"
+#    state: link
+#    force: yes
+#  notify: restart nginx
+#  when: build_moodle
+
+- name: Create nginx active vhost symlink for ENHANCED interface
   file:
-    src: "{{ nginx_available_vhosts_path }}/{{ interface_type_files[interface_type] }}"
-    dest: "{{ nginx_enabled_vhosts_path }}/connectbox_interface.conf"
+    src: "{{ nginx_available_vhosts_path }}/{{ nginx_vhost_file_enhanced }}"
+    dest: "{{ nginx_enabled_vhosts_path }}/connectbox_enhanced.conf"
     state: link
     force: yes
+  when: enhanced_interface|bool == true
+  notify: restart nginx
+
+- name: Create nginx active vhost symlink for CLASSIC interface
+  file:
+    src: "{{ nginx_available_vhosts_path }}/{{ nginx_vhost_file_classic }}"
+    dest: "{{ nginx_enabled_vhosts_path }}/connectbox_classic.conf"
+    state: link
+    force: yes
+  when: enhanced_interface|bool == false
   notify: restart nginx
 
 - name: Ensure nginx is started and enabled to start at boot
