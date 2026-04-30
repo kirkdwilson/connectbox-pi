@@ -26,6 +26,7 @@ def run_cmd(cmd):
 		subprocess.run(cmd, shell=True, check=True)
 	except subprocess.CalledProcessError as e:
 		logging.error(f"Command failed: {cmd}")
+		print(f"    *** run_cmd FAILED (exit {e.returncode}): {cmd}")
 
 
 def mmiloader_code():
@@ -822,8 +823,8 @@ def mmiloader_code():
 			if (((content["image"] == 'blank.gif') or (content['image'] == "")) and (os.path.isfile(mediaDirectory + "/.thumbnail-" + language + "-" + slug + ".png"))):
 				print ("	Found Thumbnail" +  mediaDirectory + "/.thumbnail-" + language + "-" + slug + ".png")
 				content["image"] =  slug + ".png"
-				run_cmd ('ln -s "'+ mediaDirectory + '/.thumbnail-' + language + '-' + slug + '.png"' + '  "' + contentDirectory + '/' + language + '/images/' + slug + '.png"')
-				print ("	Thumbnail link complete at: " + mediaDirectory + "/" +  content["image"])
+				shutil.copy(mediaDirectory + '/.thumbnail-' + language + '-' + slug + '.png', contentDirectory + '/' + language + '/images/' + slug + '.png')
+				print ("	Thumbnail copy complete at: " + contentDirectory + '/' + language + '/images/' + slug + '.png')
 				if ('collection' in locals() or 'collection' in globals()):
 					if (collection['image'] == 'blank.gif'): collection['image'] = content['image']
 
@@ -862,7 +863,7 @@ def mmiloader_code():
 						print ("        We found the thumbnail")
 					try:
 						if os.path.getsize( mediaDirectory + "/.thumbnail-" + language + "-" + slug + ".png") > 100:		#image is large enough to be usable.
-							run_cmd ('ln -s "' + mediaDirectory +  '/.thumbnail-' + language + '-' + slug + '.png' + '"  "' + contentDirectory + '/' + language + '/images/' +  slug + '.png"')
+							shutil.copy(mediaDirectory + '/.thumbnail-' + language + '-' + slug + '.png', contentDirectory + '/' + language + '/images/' + slug + '.png')
 							content["image"] =  slug + ".png"
 						else:
 							print ("        Image was too small to use!!!!!!!")
@@ -888,9 +889,9 @@ def mmiloader_code():
 							content["image"]= slug + ".png"
 							if (os.path.getsize( mediaDirectory + '/.thumbnail-' + language + '-' + slug + '.png') > 100):
 								print("mp3 thumbnail image created")
-								run_cmd ('ln -s "' + mediaDirectory + '/.thumbnail-' + language + '-' + slug + '.png' + '"  "' + contentDirectory + '/' + language + '/images/' + slug + '.png"')
-								if os.path.isfile(mediaDirectory + '/.thumbnail-' + language + '-' + slug + ".png"):
-									print ("	Thumbnail image link complete at: " + mediaDirectory + "/.thumbnail-"+ language + "-" + slug + ".png")
+								shutil.copy(mediaDirectory + '/.thumbnail-' + language + '-' + slug + '.png', contentDirectory + '/' + language + '/images/' + slug + '.png')
+								if os.path.isfile(contentDirectory + '/' + language + '/images/' + slug + '.png'):
+									print ("	Thumbnail image copy complete at: " + contentDirectory + '/' + language + '/images/' + slug + '.png')
 								else:
 									print ("       Thumbnail image did not get linked...or created.  ?????? What to do????? ")
 									raise Exception("fail")
