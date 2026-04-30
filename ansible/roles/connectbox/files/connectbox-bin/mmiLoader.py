@@ -207,10 +207,17 @@ def mmiloader_code():
 		try:
 			print ("lang is: ",languageCodes[lang]['english'])
 
-			if len(lang) > 3: 								#Were making hard spaces on the proported language
-				print("checking language " + lang + " is NOT a valid language and will be removed from the list")
-				doesRootContainLanguage.remove(lang)
-				if y > 0: y -= 1
+			if len(lang) > 3: 								#Check for regional variant (e.g. zh-CN, pt-BR)
+				base_lang = lang.split('-')[0] if '-' in lang else ''
+				if base_lang and base_lang in languageCodes:
+					# Alias regional variant so all subsequent languageCodes[lang] lookups work
+					languageCodes[lang] = languageCodes[base_lang]
+					print("checking language " + lang + " as valid regional variant of " + base_lang)
+					y += 1
+				else:
+					print("checking language " + lang + " is NOT a valid language and will be removed from the list")
+					doesRootContainLanguage.remove(lang)
+					if y > 0: y -= 1
 
 			elif (languageCodes[lang]):
 				print("checking language " + lang + " as a valide language",languageCodes[lang])
